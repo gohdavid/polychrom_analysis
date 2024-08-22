@@ -15,25 +15,26 @@ al. (2021). All other parameters are hard-coded and match Goychuk et al. (2023).
 
 import os
 import sys
-import timeq
+import time
 
 sys.path.append(os.getcwd())
 
 import numpy as np
 from polychrom import forcekits, forces, simulation, starting_conformations
 from polychrom.hdf5_format import HDF5Reporter
-from simtk import unitgit 
+from simtk import unit
 
 from contrib.integrators import ActiveBrownianIntegrator
+from contrib.forces import flow
 
 # 1 is A, 0 is B
-ABids = np.loadtxt("data/ABidentities_chr21_Su2020_2perlocus.csv", dtype=str)
-ids = (ABids == "A").astype(int)
+ids = np.ones(1000)
+ids[799] = 0
 N = len(ids)
 
 
 def run_monomer_diffusion(replicate,
-    gpuid, N, ids, activity_ratio, timestep=170, nblocks=1000000, blocksize=100
+    gpuid, N, ids, activity_ratio, timestep=170, nblocks=1000000, blocksize=100, beta=0
 ):
     """Run a single simulation on a GPU of a hetero-polymer with A monomers and B monomers. A monomers
     have a larger diffusion coefficient than B monomers, with an activity ratio of D_A / D_B.
@@ -65,10 +66,12 @@ def run_monomer_diffusion(replicate,
         (N, 3)
     )  # Dx, Dy, Dz --> we assume the diffusion coefficient in each spatial dimension is the same
     # by default set the average diffusion coefficient to be 1 kT/friction
-    # let D_A = 1 + Ddiff and D_B = 1 - Ddiff such that D_A / D_B is the given activity_ratio
-    Ddiff = (activity_ratio - 1) / (activity_ratio + 1)
-    D[ids == 0, :] = 1.0 - Ddiff
-    D[ids == 1, :] = 1.0 + Ddiff
+    friction_ratio = np.ones(
+        (N, 3)
+    )
+    Bfriction = 25.0
+    friction_ratio[ids == 0, :] = Bfriction
+    friction_ratio[ids == 1, :] = 1.0
     # monomer density in confinement in units of monomers/volume
     density = 0.224
     r = (3 * N / (4 * 3.141592 * density)) ** (1 / 3)
@@ -77,15 +80,18 @@ def run_monomer_diffusion(replicate,
     # the monomer diffusion coefficient should be in units of kT / friction, where friction = mass*collision_rate
     collision_rate = 2.0
     mass = 100 * unit.amu
-    friction = collision_rate * (1.0 / unit.picosecond) * mass
+    unit_friction = collision_rate * (1.0 / unit.picosecond) * mass
+    particlefriction = friction_ratio * unit_friction
     temperature = 300
     kB = unit.BOLTZMANN_CONSTANT_kB * unit.AVOGADRO_CONSTANT_NA
     kT = kB * temperature * unit.kelvin
-    particleD = unit.Quantity(D, kT / friction)
-    integrator = ActiveBrownianIntegrator(timestep, collision_rate, particleD)
+    particleD = unit.Quantity(D/friction_ratio, kT / unit_friction)
+    integrator = ActiveBrownianIntegrator(timestep, collision_rate, particleD, particlefriction)
     gpuid = f"{gpuid}"
+    dirname = f"./act_ratio_{activity_ratio}_{beta}_{Bfriction}/run{replicate}"
+    os.makedirs(dirname,exist_ok=True)
     reporter = HDF5Reporter(
-        folder=f"act_ratio_{activity_ratio}/run{replicate}",
+        folder=dirname,
         max_data_length=1000,
         overwrite=True,
     )
@@ -129,6 +135,8 @@ def run_monomer_diffusion(replicate,
             except_bonds=True,
         )
     )
+    params = {"beta":beta,"R":25,"l":424}
+    sim.add_force(flow(params,199,799))
     tic = time.perf_counter()
     for _ in range(nblocks):  # Do 10 blocks
         sim.do_block(blocksize)  # Of 100 timesteps each. Data is saved automatically.
@@ -144,7 +152,7 @@ if __name__ == "__main__":
     num_tasks = int(sys.argv[2])
 
     # parameters to sweep
-    act_values = np.arange(0.5, 3.0, 0.5)
+    act_values = [1]
     print(act_values)
 
     # batch to process with this task
@@ -153,4 +161,4 @@ if __name__ == "__main__":
     for activity_ratio in acts_per_task:
         for i in range(20):
             print(f"Running simulation with activity ratio: {activity_ratio}")
-            run_monomer_diffusion(i, 0, N, ids, activity_ratio)
+            run_monomer_diffusion(i, 0, N, ids, activity_ratio, beta = 0)

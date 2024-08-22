@@ -67,11 +67,12 @@ class ActiveBrownianIntegrator(
 
     """
 
-    def __init__(self, timestep, collision_rate, particleD):
+    def __init__(self, timestep, collision_rate, particleD, particlefriction):
         super(ActiveBrownianIntegrator, self).__init__(timestep * unit.femtosecond)
-        self.addGlobalVariable("zeta", collision_rate * (1 / unit.picosecond))
+        self.addPerDofVariable("zeta", 0)
         self.addPerDofVariable("D", 0)
         self.addPerDofVariable("x1", 0)
+        self.setPerDofVariableByName("zeta", particlefriction)
         self.setPerDofVariableByName("D", particleD)
         self.addUpdateContextState()
         self.addComputePerDof("x1", "x + (f/(zeta*m))*dt + sqrt(2*D*dt)*gaussian")

@@ -133,3 +133,18 @@ def spherical_confinement_array(
     sim_object.sphericalConfinementRadius = r
 
     return force
+
+def flow(params,particle_1,particle_2):
+    keys = {'beta', 'R', 'l'}
+    assert keys.issubset(params.keys()), f"Some parameters are missing."
+    force = openmm.CustomBondForce(
+        "beta * (step(R-r) * within + step(r-R) * outside);"
+        "within = 2*exp(-R/l)*(l+R)*(-r+l*sinh(r/l))/r;"
+        "outside = exp(-(r+R)/l)*(2*exp((r+R)/l)*l*r+exp(2*R/l)*l*(l-R)-(l+2*exp(r/l)*r)*(l+R))/r;"
+    )
+    force.addGlobalParameter("beta", params["beta"])
+    force.addGlobalParameter("R", params["R"])
+    force.addGlobalParameter("l", params["l"])
+    force.addBond(particle_1, particle_2, [])
+    force.name = "flow"
+    return force
